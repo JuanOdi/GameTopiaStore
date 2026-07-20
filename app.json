@@ -17,14 +17,29 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.GametopiaStore"
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "GametopiaStore",
+      "shortName": "Gametopia",
+      "description": "GametopiaStore — Order management app",
+      "themeColor": "#208AEF",
+      "backgroundColor": "#0f0f0f",
+      "display": "standalone",
+      "orientation": "portrait",
+      "lang": "en"
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "default"
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -34,7 +49,9 @@
             "imageWidth": 76
           }
         }
-      ]
+      ],
+      "expo-font",
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,
