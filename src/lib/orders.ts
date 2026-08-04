@@ -110,6 +110,21 @@ export async function updateOrderStatus(orderId: string, status: Order['status']
   }
 }
 
+export async function markOrderPaid(orderId: string, method: 'cash' | 'gcash') {
+  const snap = await get(ref(db, `orders/${orderId}`));
+  const order = snap.val() as Order | null;
+  if (!order || order.paymentStatus !== 'unpaid') return;
+  const absTotal = Math.abs(order.total);
+  await update(ref(db, `orders/${orderId}`), { paymentStatus: method, total: absTotal });
+  if (order.status === 'completed' || order.status === 'confirmed') {
+    await recordRevenue(absTotal);
+  }
+  if (!order.isCustom) {
+    // Creation logged -absTotal into product stats for unpaid orders; +2x flips it to +absTotal
+    await incrementProductStat(order.productId, order.productName, 0, absTotal * 2);
+  }
+}
+
 export async function notifyAdmin(orderId: string) {
   await update(ref(db, `orders/${orderId}`), { lastNotifiedAt: Date.now() });
 }

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/hooks/use-auth';
-import { type Order, notifyAdmin, subscribeToUserOrders } from '@/lib/orders';
+import { type Order, markOrderPaid, notifyAdmin, subscribeToUserOrders } from '@/lib/orders';
 import { C, F, R } from '@/lib/theme';
 
 const STATUS_CONFIG: Record<Order['status'], { color: string; label: string; message: string }> = {
@@ -20,7 +20,7 @@ export default function UserOrdersScreen() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
-  const [cooldowns, setCooldowns] = useState<Record<string, number>>({});
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     if (!user) return;
@@ -28,19 +28,41 @@ export default function UserOrdersScreen() {
     return () => unsubscribe();
   }, [user]);
 
+  // Tick every second while any pending order is in notify cooldown, so the countdown updates
+  useEffect(() => {
+    const hasActiveCooldown = orders.some(
+      (o) => o.status === 'pending' && o.lastNotifiedAt && Date.now() - o.lastNotifiedAt < COOLDOWN_MS
+    );
+    if (!hasActiveCooldown) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [orders, now]);
+
   async function handleNotify(order: Order) {
-    const lastSent = cooldowns[order.id] ?? 0;
-    const remaining = Math.ceil((COOLDOWN_MS - (Date.now() - lastSent)) / 1000);
-    if (Date.now() - lastSent < COOLDOWN_MS) {
-      Alert.alert('Please wait', `You can notify again in ${remaining} seconds.`);
-      return;
-    }
+    if (Date.now() - (order.lastNotifiedAt ?? 0) < COOLDOWN_MS) return;
     try {
       await notifyAdmin(order.id);
-      setCooldowns((prev) => ({ ...prev, [order.id]: Date.now() }));
-      Alert.alert('Notified!', 'The admin has been notified about your order.');
+      setNow(Date.now());
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      if (Platform.OS === 'web') window.alert(e.message);
+      else Alert.alert('Error', e.message);
+    }
+  }
+
+  const [paidConfirm, setPaidConfirm] = useState<{ order: Order; method: 'cash' | 'gcash' } | null>(null);
+  const [savingPaid, setSavingPaid] = useState(false);
+
+  async function confirmPaid() {
+    if (!paidConfirm || savingPaid) return;
+    setSavingPaid(true);
+    try {
+      await markOrderPaid(paidConfirm.order.id, paidConfirm.method);
+      setPaidConfirm(null);
+    } catch (e: any) {
+      if (Platform.OS === 'web') window.alert(e.message);
+      else Alert.alert('Error', e.message);
+    } finally {
+      setSavingPaid(false);
     }
   }
 
@@ -228,12 +250,40 @@ export default function UserOrdersScreen() {
                     <Text style={styles.unpaidReason}>Reason: {order.unpaidReason}</Text>
                   ) : null}
 
-                  {order.status === 'pending' && (
-                    <Pressable
-                      style={({ pressed }) => [styles.notifyBtn, pressed && { transform: [{ scale: 0.97 }] }]}
-                      onPress={() => handleNotify(order)}>
-                      <Text style={styles.notifyText}>🔔 Notify Admin</Text>
-                    </Pressable>
+                  {order.status === 'pending' && (() => {
+                    const remainingMs = COOLDOWN_MS - (now - (order.lastNotifiedAt ?? 0));
+                    const coolingDown = !!order.lastNotifiedAt && remainingMs > 0;
+                    return (
+                      <Pressable
+                        disabled={coolingDown}
+                        style={({ pressed }) => [
+                          styles.notifyBtn,
+                          coolingDown && styles.notifyBtnDisabled,
+                          pressed && !coolingDown && { transform: [{ scale: 0.97 }] },
+                        ]}
+                        onPress={() => handleNotify(order)}>
+                        <Text style={[styles.notifyText, coolingDown && styles.notifyTextDisabled]}>
+                          {coolingDown
+                            ? `🔔 Notified · wait ${Math.ceil(remainingMs / 1000)}s`
+                            : '🔔 Notify Admin'}
+                        </Text>
+                      </Pressable>
+                    );
+                  })()}
+
+                  {order.paymentStatus === 'unpaid' && order.status !== 'cancelled' && (
+                    <View style={styles.paidRow}>
+                      <Pressable
+                        style={({ pressed }) => [styles.paidBtn, pressed && { transform: [{ scale: 0.97 }] }]}
+                        onPress={() => setPaidConfirm({ order, method: 'cash' })}>
+                        <Text style={styles.paidText}>💵 Paid · Cash</Text>
+                      </Pressable>
+                      <Pressable
+                        style={({ pressed }) => [styles.paidBtn, pressed && { transform: [{ scale: 0.97 }] }]}
+                        onPress={() => setPaidConfirm({ order, method: 'gcash' })}>
+                        <Text style={styles.paidText}>📱 Paid · GCash</Text>
+                      </Pressable>
+                    </View>
                   )}
                 </View>
 
@@ -248,6 +298,43 @@ export default function UserOrdersScreen() {
           }}
         />
       )}
+
+      {/* Mark as Paid confirmation modal */}
+      <Modal
+        transparent
+        visible={paidConfirm !== null}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => !savingPaid && setPaidConfirm(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalIconCircle}>
+              <Text style={styles.modalIcon}>{paidConfirm?.method === 'gcash' ? '📱' : '💵'}</Text>
+            </View>
+            <Text style={styles.modalTitle}>Mark as Paid</Text>
+            <View style={styles.modalDivider} />
+            <Text style={styles.modalMessage}>
+              Mark <Text style={styles.modalHighlight}>{paidConfirm?.order.productName}</Text> (₱
+              {paidConfirm ? Math.abs(paidConfirm.order.total).toFixed(2) : ''}) as paid with{' '}
+              <Text style={styles.modalHighlight}>{paidConfirm?.method === 'gcash' ? 'GCash' : 'Cash'}</Text>?
+            </Text>
+            <View style={styles.modalBtnRow}>
+              <Pressable
+                disabled={savingPaid}
+                style={({ pressed }) => [styles.modalBtn, styles.modalBtnCancel, pressed && styles.modalBtnPressed]}
+                onPress={() => setPaidConfirm(null)}>
+                <Text style={styles.modalBtnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                disabled={savingPaid}
+                style={({ pressed }) => [styles.modalBtn, styles.modalBtnConfirm, pressed && styles.modalBtnPressed]}
+                onPress={confirmPaid}>
+                <Text style={styles.modalBtnConfirmText}>{savingPaid ? 'Saving…' : '✓ Yes, Paid'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -337,6 +424,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   notifyText: { color: C.amber, fontFamily: F.bold, fontSize: 13 },
+  notifyBtnDisabled: { backgroundColor: C.surface2, borderColor: C.line, opacity: 0.7 },
+  notifyTextDisabled: { color: C.muted2 },
+
+  paidRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  paidBtn: {
+    flex: 1,
+    backgroundColor: C.green + '1A',
+    borderWidth: 1,
+    borderColor: C.green + '59',
+    borderRadius: R.btn,
+    paddingVertical: 9,
+    alignItems: 'center',
+  },
+  paidText: { color: C.green, fontFamily: F.bold, fontSize: 13 },
 
   cardRight: { alignItems: 'flex-end' },
   totalText: { color: C.green, fontFamily: F.extraBold, fontSize: 19, letterSpacing: -0.4 },
@@ -354,6 +455,59 @@ const styles = StyleSheet.create({
   unpaidReason:   { color: C.muted, fontFamily: F.medium, fontSize: 12, marginTop: 2 },
   paymentPill:    { borderWidth: 1, borderRadius: R.chip, paddingHorizontal: 8, paddingVertical: 3 },
   paymentPillText:{ fontFamily: F.bold, fontSize: 10.5 },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: C.surface,
+    borderRadius: 24,
+    paddingVertical: 32,
+    paddingHorizontal: 28,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: C.line,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.6,
+    shadowRadius: 30,
+    elevation: 20,
+    gap: 16,
+  },
+  modalIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: C.green + '22',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  modalIcon:      { fontSize: 28 },
+  modalTitle:     { color: C.text, fontSize: 20, fontFamily: F.extraBold, textAlign: 'center', letterSpacing: 0.3 },
+  modalDivider:   { width: 40, height: 2, backgroundColor: C.line, borderRadius: 2 },
+  modalMessage:   { color: C.muted, fontSize: 14, fontFamily: F.medium, textAlign: 'center', lineHeight: 22 },
+  modalHighlight: { color: C.text, fontFamily: F.bold },
+  modalBtnRow:    { flexDirection: 'row', gap: 10, marginTop: 8, alignSelf: 'stretch' },
+  modalBtn:       { flex: 1, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  modalBtnCancel: { backgroundColor: C.surface2, borderWidth: 1, borderColor: C.line },
+  modalBtnConfirm: {
+    backgroundColor: C.green,
+    shadowColor: C.green,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalBtnPressed:     { opacity: 0.8, transform: [{ scale: 0.97 }] },
+  modalBtnCancelText:  { color: C.muted, fontSize: 15, fontFamily: F.bold },
+  modalBtnConfirmText: { color: C.bg, fontSize: 15, fontFamily: F.bold, letterSpacing: 0.3 },
 
   emptyScreen:   { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, backgroundColor: C.bg },
   emptyIcon:     { fontSize: 52 },
