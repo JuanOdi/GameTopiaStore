@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   Alert,
   FlatList,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -35,6 +36,29 @@ export default function AdminOrdersScreen() {
 	const [orders, setOrders] = useState<Order[]>([]);
 	const [filter, setFilter] = useState<Filter>("all");
 	const [search, setSearch] = useState("");
+	const [rejectTarget, setRejectTarget] = useState<Order | null>(null);
+	const [rejectReason, setRejectReason] = useState("");
+
+	async function handleAccept(order: Order) {
+		try {
+			await updateOrderStatus(order.id, "confirmed");
+		} catch (e: any) {
+			if (Platform.OS === "web") window.alert(e.message);
+			else Alert.alert("Error", e.message);
+		}
+	}
+
+	async function handleConfirmReject() {
+		if (!rejectTarget) return;
+		try {
+			await updateOrderStatus(rejectTarget.id, "cancelled", rejectReason.trim());
+			setRejectTarget(null);
+			setRejectReason("");
+		} catch (e: any) {
+			if (Platform.OS === "web") window.alert(e.message);
+			else Alert.alert("Error", e.message);
+		}
+	}
 
 	useEffect(() => {
 		const unsubscribe = subscribeToOrders(setOrders);
@@ -447,6 +471,31 @@ export default function AdminOrdersScreen() {
 									) : null}
 
 									{/* Action buttons */}
+									{order.status === "pending" && (
+										<View style={styles.pendingActionsRow}>
+											<Pressable
+												style={({ pressed }) => [
+													styles.acceptBtn,
+													pressed && { opacity: 0.8 },
+												]}
+												onPress={() => handleAccept(order)}
+											>
+												<Text style={styles.acceptBtnText}>✓ Accept</Text>
+											</Pressable>
+											<Pressable
+												style={({ pressed }) => [
+													styles.rejectBtn,
+													pressed && { opacity: 0.8 },
+												]}
+												onPress={() => {
+													setRejectReason("");
+													setRejectTarget(order);
+												}}
+											>
+												<Text style={styles.rejectBtnText}>✕ Reject</Text>
+											</Pressable>
+										</View>
+									)}
 									{order.status === "confirmed" && (
 										<Pressable
 											style={styles.completeBtn}
@@ -484,6 +533,58 @@ export default function AdminOrdersScreen() {
 					}}
 				/>
 			)}
+
+			{/* Reject order modal */}
+			<Modal
+				transparent
+				visible={rejectTarget !== null}
+				animationType="fade"
+				statusBarTranslucent
+				onRequestClose={() => setRejectTarget(null)}
+			>
+				<View style={styles.modalOverlay}>
+					<View style={styles.modalCard}>
+						<Text style={styles.modalTitle}>Reject Order</Text>
+						<Text style={styles.modalMessage}>
+							Reject{" "}
+							<Text style={styles.modalHighlight}>
+								{rejectTarget?.productName}
+							</Text>{" "}
+							from {rejectTarget?.userEmail}?
+						</Text>
+						<TextInput
+							style={styles.modalInput}
+							placeholder="Reason for rejection (optional)"
+							placeholderTextColor={C.muted2}
+							value={rejectReason}
+							onChangeText={setRejectReason}
+							returnKeyType="done"
+						/>
+						<View style={styles.modalBtnRow}>
+							<Pressable
+								style={({ pressed }) => [
+									styles.modalBtn,
+									styles.modalBtnCancel,
+									pressed && { opacity: 0.8 },
+								]}
+								onPress={() => setRejectTarget(null)}
+							>
+								<Text style={styles.modalBtnCancelText}>Cancel</Text>
+							</Pressable>
+							<Pressable
+								style={({ pressed }) => [
+									styles.modalBtn,
+									styles.modalBtnReject,
+									pressed && { opacity: 0.8 },
+								]}
+								onPress={handleConfirmReject}
+							>
+								<Text style={styles.modalBtnRejectText}>✕ Reject</Text>
+							</Pressable>
+						</View>
+					</View>
+				</View>
+			</Modal>
 		</View>
 	);
 }
@@ -637,6 +738,89 @@ const styles = StyleSheet.create({
 	},
 
 	/* Actions */
+	pendingActionsRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+	acceptBtn: {
+		flex: 1,
+		backgroundColor: C.green,
+		borderRadius: R.btn,
+		padding: 11,
+		alignItems: "center",
+	},
+	acceptBtnText: { color: "#0f0e0d", fontFamily: F.bold, fontSize: 14 },
+	rejectBtn: {
+		flex: 1,
+		backgroundColor: C.coral,
+		borderRadius: R.btn,
+		padding: 11,
+		alignItems: "center",
+	},
+	rejectBtnText: { color: "#ffffff", fontFamily: F.bold, fontSize: 14 },
+
+	/* Reject modal */
+	modalOverlay: {
+		flex: 1,
+		backgroundColor: "rgba(0,0,0,0.8)",
+		justifyContent: "center",
+		alignItems: "center",
+		paddingHorizontal: 24,
+	},
+	modalCard: {
+		width: "100%",
+		maxWidth: 400,
+		backgroundColor: C.surface,
+		borderRadius: 24,
+		paddingVertical: 28,
+		paddingHorizontal: 24,
+		borderWidth: 1,
+		borderColor: C.line,
+		shadowColor: "#000",
+		shadowOffset: { width: 0, height: 20 },
+		shadowOpacity: 0.6,
+		shadowRadius: 30,
+		elevation: 20,
+		gap: 14,
+	},
+	modalTitle: {
+		color: C.text,
+		fontSize: 20,
+		fontFamily: F.extraBold,
+		textAlign: "center",
+	},
+	modalMessage: {
+		color: C.muted,
+		fontSize: 14,
+		fontFamily: F.medium,
+		textAlign: "center",
+		lineHeight: 22,
+	},
+	modalHighlight: { color: C.text, fontFamily: F.bold },
+	modalInput: {
+		backgroundColor: C.surface2,
+		borderWidth: 1,
+		borderColor: C.line,
+		borderRadius: R.btn,
+		paddingHorizontal: 14,
+		paddingVertical: 11,
+		color: C.text,
+		fontFamily: F.medium,
+		fontSize: 14,
+	},
+	modalBtnRow: { flexDirection: "row", gap: 10, marginTop: 4 },
+	modalBtn: {
+		flex: 1,
+		borderRadius: R.btn,
+		paddingVertical: 13,
+		alignItems: "center",
+	},
+	modalBtnCancel: {
+		backgroundColor: C.surface2,
+		borderWidth: 1,
+		borderColor: C.line,
+	},
+	modalBtnCancelText: { color: C.muted, fontFamily: F.bold, fontSize: 14 },
+	modalBtnReject: { backgroundColor: C.coral },
+	modalBtnRejectText: { color: "#ffffff", fontFamily: F.bold, fontSize: 14 },
+
 	completeBtn: {
 		backgroundColor: C.green,
 		borderRadius: R.btn,

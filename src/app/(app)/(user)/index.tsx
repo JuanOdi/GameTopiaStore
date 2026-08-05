@@ -175,8 +175,14 @@ export default function StoreScreen() {
 	const [successCount, setSuccessCount] = useState(0);
 
 	const isTablet = width >= 768;
-	const numColumns = isTablet ? 3 : 2;
-	const cardWidth = (width - 32 - (numColumns - 1) * 12) / numColumns;
+	// Responsive grid: fit as many columns as the screen allows, cards stretch to fill the row.
+	// Use the measured container width (window width includes the scrollbar on web, cutting off the last column).
+	const [gridWidth, setGridWidth] = useState(0);
+	const layoutWidth = gridWidth || width;
+	const GRID_GAP = 12;
+	const MIN_CARD_WIDTH = isTablet ? 220 : 160;
+	const numColumns = Math.max(2, Math.floor((layoutWidth - 32 + GRID_GAP) / (MIN_CARD_WIDTH + GRID_GAP)));
+	const cardWidth = (layoutWidth - 32 - (numColumns - 1) * GRID_GAP) / numColumns;
 
 	const categories = useMemo(() => {
 		const cats = [...new Set(products.map((p) => p.category))];
@@ -458,7 +464,10 @@ export default function StoreScreen() {
 	);
 
 	return (
-		<View style={styles.container}>
+		<View
+			style={styles.container}
+			onLayout={(e) => setGridWidth(e.nativeEvent.layout.width)}
+		>
 			{/* Product grid */}
 			<FlatList
 				data={filtered}
@@ -1172,30 +1181,43 @@ const styles = StyleSheet.create({
 	},
 	unavailableText: { color: C.muted2, fontSize: 11, fontFamily: F.bold },
 
-	cardBody: { padding: 12, gap: 5 },
+	cardBody: { padding: 14, gap: 6, flex: 1 },
 	cardCategory: {
-		fontSize: 10.5,
+		fontSize: 11.5,
 		fontFamily: F.bold,
 		textTransform: "uppercase",
 		letterSpacing: 0.6,
 	},
 	cardName: {
 		color: C.text,
-		fontSize: 14,
+		fontSize: 16,
 		fontFamily: F.extraBold,
 		letterSpacing: -0.3,
-		lineHeight: 20,
+		lineHeight: 22,
+		minHeight: 44, // reserve 2 lines so stock/price rows align across cards
 	},
-	stockRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-	stockDot: { width: 6, height: 6, borderRadius: 3 },
-	stockText: { color: C.muted2, fontSize: 11, fontFamily: F.medium },
+	stockRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 6,
+		backgroundColor: C.green + "1A",
+		borderWidth: 1,
+		borderColor: C.green + "40",
+		borderRadius: 999,
+		paddingHorizontal: 10,
+		paddingVertical: 4,
+		alignSelf: "flex-start",
+	},
+	stockDot: { width: 7, height: 7, borderRadius: 3.5 },
+	stockText: { color: C.green, fontSize: 12.5, fontFamily: F.bold },
 
 	cardPriceRow: {
 		flexDirection: "row",
 		justifyContent: "space-between",
 		alignItems: "center",
+		marginTop: "auto", // pin price + button to the card bottom
 	},
-	cardPrice: { color: C.amber, fontSize: 16, fontFamily: F.extraBold },
+	cardPrice: { color: C.amber, fontSize: 18, fontFamily: F.extraBold },
 
 	cardAddBtn: {
 		width: 36,
