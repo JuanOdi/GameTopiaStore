@@ -1,4 +1,4 @@
-import { get, onValue, ref, remove, runTransaction, set } from 'firebase/database';
+import { get, onValue, ref, remove, runTransaction, set, update } from 'firebase/database';
 
 import { db } from './firebase';
 
@@ -17,9 +17,11 @@ export async function recordRevenue(amount: number, date?: string): Promise<void
 }
 
 export async function resetTodayRevenue(): Promise<void> {
-  const shifted = new Date(Date.now() + 4 * 60 * 60 * 1000);
-  const todayKey = shifted.toISOString().slice(0, 10);
-  await remove(ref(db, `stats/daily/${todayKey}`));
+  // Clears the aggregate bar and stamps a marker so order-derived views (GCash/Cash) reset too
+  await update(ref(db, `stats/daily/${getPHTDate()}`), {
+    revenue: null,
+    revenueResetAt: Date.now(),
+  });
 }
 
 export async function resetTodayGCashFees(): Promise<void> {
@@ -31,17 +33,20 @@ export async function resetTodayPrintEarnings(): Promise<void> {
 }
 
 export function subscribeToTodayResets(
-  callback: (gcashResetAt: number, printResetAt: number) => void
+  callback: (gcashResetAt: number, printResetAt: number, revenueResetAt: number) => void
 ) {
   const todayKey = getPHTDate();
-  let g = 0, p = 0;
+  let g = 0, p = 0, rev = 0;
   const u1 = onValue(ref(db, `stats/daily/${todayKey}/gcashFeeResetAt`), snap => {
-    g = snap.val() ?? 0; callback(g, p);
+    g = snap.val() ?? 0; callback(g, p, rev);
   });
   const u2 = onValue(ref(db, `stats/daily/${todayKey}/printEarningResetAt`), snap => {
-    p = snap.val() ?? 0; callback(g, p);
+    p = snap.val() ?? 0; callback(g, p, rev);
   });
-  return () => { u1(); u2(); };
+  const u3 = onValue(ref(db, `stats/daily/${todayKey}/revenueResetAt`), snap => {
+    rev = snap.val() ?? 0; callback(g, p, rev);
+  });
+  return () => { u1(); u2(); u3(); };
 }
 
 export function subscribeToWeeklyRevenue(

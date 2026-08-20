@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
@@ -6,19 +6,31 @@ import { useAuth } from '@/hooks/use-auth';
 import { type CashRequest, type PrintRecord, subscribeToAllCashRequests, subscribeToAllPrintRecords } from '@/lib/gcash';
 import { type Order, subscribeToOrders } from '@/lib/orders';
 import { type CustomerStat, deleteCustomerStats, resetTodayGCashFees, resetTodayPrintEarnings, resetTodayRevenue, subscribeToCustomerStats, subscribeToTodayResets, subscribeToWeeklyRevenue } from '@/lib/stats';
+import { type OnlineUser, forceLogout, subscribeToOnlineUsers } from '@/lib/presence';
 import { type Product, subscribeToAllProducts, updateProduct } from '@/lib/products';
 import { setStoreOpen, subscribeToStoreStatus } from '@/lib/store-settings';
 import { C, F, R } from '@/lib/theme';
 
-function MiniBarChart({ bars, color }: { bars: { day: string; value: number }[]; color: string }) {
+function MiniBarChart({ bars, color, onPressBar }: {
+  bars: { day: string; value: number; date?: string }[];
+  color: string;
+  onPressBar?: (bar: { day: string; value: number; date?: string }) => void;
+}) {
   const maxVal = Math.max(...bars.map(b => b.value), 1);
   return (
     <View style={styles.barChart}>
       {bars.map((b, i) => {
         const isToday = i === bars.length - 1;
         const barHeight = Math.max(4, (b.value / maxVal) * 52);
+        const Column = onPressBar ? Pressable : View;
         return (
-          <View key={i} style={styles.barColumn}>
+          <Column
+            key={i}
+            style={onPressBar
+              ? ({ pressed }: { pressed: boolean }) => [styles.barColumn, pressed && { opacity: 0.7 }]
+              : styles.barColumn}
+            {...(onPressBar ? { onPress: () => onPressBar(b) } : {})}
+          >
             {b.value > 0 && (
               <Text style={[styles.barValue, { color: isToday ? color : C.muted2 }]}>
                 {b.value >= 1000 ? `₱${(b.value / 1000).toFixed(1)}k` : `₱${b.value.toFixed(0)}`}
@@ -26,7 +38,7 @@ function MiniBarChart({ bars, color }: { bars: { day: string; value: number }[];
             )}
             <View style={[styles.bar, { height: barHeight, backgroundColor: isToday ? color : color + '73' }]} />
             <Text style={[styles.barLabel, isToday && { color, fontFamily: F.bold }]}>{b.day}</Text>
-          </View>
+          </Column>
         );
       })}
     </View>
@@ -40,16 +52,21 @@ function getStartOfTodayPHT(): number {
   return new Date(dateStr + 'T04:00:00+08:00').getTime();
 }
 
-function computeStats(orders: Order[]) {
+function computeStats(orders: Order[], revenueResetAt: number = 0) {
   const start = getStartOfTodayPHT();
   const filtered = orders.filter((o) => o.createdAt >= start);
   const completed = filtered.filter((o) => o.status === 'completed' || o.status === 'confirmed');
+  const paid = completed.filter((o) => o.paymentStatus !== 'unpaid' && o.createdAt > revenueResetAt);
   return {
     total: filtered.length,
     completed: completed.length,
     cancelled: filtered.filter((o) => o.status === 'cancelled').length,
     pending: filtered.filter((o) => o.status === 'pending').length,
-    revenue: completed.filter((o) => o.paymentStatus !== 'unpaid').reduce((sum, o) => sum + o.total, 0),
+    revenue: paid.reduce((sum, o) => sum + o.total, 0),
+    gcashRevenue: paid.filter((o) => o.paymentStatus === 'gcash').reduce((sum, o) => sum + o.total, 0),
+    cashRevenue: paid.filter((o) => o.paymentStatus === 'cash').reduce((sum, o) => sum + o.total, 0),
+    gcashPaidCount: paid.filter((o) => o.paymentStatus === 'gcash').length,
+    cashPaidCount: paid.filter((o) => o.paymentStatus === 'cash').length,
   };
 }
 
@@ -66,8 +83,13 @@ export default function AdminDashboardScreen() {
   const [isOpen, setIsOpen] = useState(true);
   const [weeklyBars, setWeeklyBars] = useState<{ date: string; day: string; value: number }[]>([]);
   const [customerStats, setCustomerStats] = useState<CustomerStat[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [gcashResetAt, setGcashResetAt] = useState(0);
   const [printResetAt, setPrintResetAt] = useState(0);
+  const [revenueResetAt, setRevenueResetAt] = useState(0);
+  const [revenuePage, setRevenuePage] = useState(0);
+  const [pagerWidth, setPagerWidth] = useState(0);
+  const pagerRef = useRef<ScrollView>(null);
   const [restockPage, setRestockPage] = useState(0);
   const [restockDrafts, setRestockDrafts] = useState<Record<string, number>>({});
   const [restockSearch, setRestockSearch] = useState('');
@@ -85,6 +107,11 @@ export default function AdminDashboardScreen() {
 
   useEffect(() => {
     const unsubscribe = subscribeToCustomerStats(setCustomerStats);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToOnlineUsers(setOnlineUsers);
     return () => unsubscribe();
   }, []);
 
@@ -109,9 +136,10 @@ export default function AdminDashboardScreen() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = subscribeToTodayResets((g, p) => {
+    const unsubscribe = subscribeToTodayResets((g, p, rev) => {
       setGcashResetAt(g);
       setPrintResetAt(p);
+      setRevenueResetAt(rev);
     });
     return () => unsubscribe();
   }, []);
@@ -120,7 +148,7 @@ export default function AdminDashboardScreen() {
     setRestockPage(0);
   }, [restockSearch]);
 
-  const stats = computeStats(orders);
+  const stats = computeStats(orders, revenueResetAt);
   const zeroStockProducts = allProducts.filter((p) => p.stock === 0);
   const filteredRestockProducts = zeroStockProducts.filter((p) =>
     !restockSearch ||
@@ -138,6 +166,18 @@ export default function AdminDashboardScreen() {
     setRestockDrafts((prev) => ({ ...prev, [productId]: Math.max(0, (prev[productId] ?? 0) + delta) }));
   }
 
+  function kickUser(u: OnlineUser) {
+    const uname = u.email.split('@')[0];
+    if (Platform.OS === 'web') {
+      if (window.confirm(`Log out ${uname}? They will be returned to the login screen.`)) forceLogout(u.uid);
+    } else {
+      Alert.alert('Log Out User', `Log out ${uname}? They will be returned to the login screen.`, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Log out', style: 'destructive', onPress: () => forceLogout(u.uid) },
+      ]);
+    }
+  }
+
   async function saveRestockDraft(productId: string) {
     const qty = restockDrafts[productId] ?? 0;
     if (qty <= 0) return;
@@ -150,7 +190,6 @@ export default function AdminDashboardScreen() {
   }
 
   const bars = weeklyBars;
-  const maxBarValue = Math.max(...bars.map((b) => b.value), 1);
 
   function getShiftedDateKey(ts: number) {
     return new Date(ts + 4 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -178,6 +217,32 @@ export default function AdminDashboardScreen() {
       )
       .reduce((sum, r) => sum + r.amount, 0),
   }));
+
+  function paymentWeeklyBars(method: 'gcash' | 'cash') {
+    return weeklyBars.map(b => ({
+      ...b,
+      value: orders
+        .filter(o =>
+          (o.status === 'completed' || o.status === 'confirmed') &&
+          o.paymentStatus === method &&
+          getShiftedDateKey(o.createdAt) === b.date &&
+          !(b.date === todayDateKey && revenueResetAt > 0 && o.createdAt <= revenueResetAt)
+        )
+        .reduce((sum, o) => sum + o.total, 0),
+    }));
+  }
+
+  const revenuePages = [
+    { key: 'total', label: 'REVENUE TODAY', color: C.green, barColor: C.amber, value: stats.revenue, bars, done: stats.completed },
+    { key: 'gcash', label: 'GCASH REVENUE', color: C.blue, barColor: C.blue, value: stats.gcashRevenue, bars: paymentWeeklyBars('gcash'), done: stats.gcashPaidCount },
+    { key: 'cash', label: 'CASH REVENUE', color: C.amber, barColor: C.amber, value: stats.cashRevenue, bars: paymentWeeklyBars('cash'), done: stats.cashPaidCount },
+  ];
+  const activeRevenuePage = revenuePages[Math.min(revenuePage, revenuePages.length - 1)];
+
+  function goToRevenuePage(index: number) {
+    pagerRef.current?.scrollTo({ x: index * pagerWidth, animated: true });
+    setRevenuePage(index);
+  }
 
   const gcashDoneCount = cashRequests.filter(
     r => r.status === 'approved' && weeklyBars.some(b => getShiftedDateKey(r.createdAt) === b.date)
@@ -218,14 +283,16 @@ export default function AdminDashboardScreen() {
         </Pressable>
       </View>
 
-      {/* Hero Revenue Card */}
+      {/* Hero Revenue Card — swipe between Total / GCash / Cash */}
       <View style={[styles.heroCard, { marginBottom: 16 }]}>
         {/* Header row */}
         <View style={styles.heroCardHeader}>
-          <Text style={styles.heroCardLabel}>REVENUE TODAY</Text>
+          <Text style={styles.heroCardLabel}>{activeRevenuePage.label}</Text>
           <View style={styles.heroCardHeaderRight}>
-            <View style={styles.heroDoneChip}>
-              <Text style={styles.heroDoneChipText}>{stats.completed} done</Text>
+            <View style={[styles.heroDoneChip, { backgroundColor: activeRevenuePage.color + '1A' }]}>
+              <Text style={[styles.heroDoneChipText, { color: activeRevenuePage.color }]}>
+                {activeRevenuePage.done} done
+              </Text>
             </View>
             <Pressable
               style={({ pressed }) => [styles.deleteAllBtn, pressed && { opacity: 0.7 }]}
@@ -244,38 +311,48 @@ export default function AdminDashboardScreen() {
           </View>
         </View>
 
-        {/* Big revenue number */}
-        <Text style={styles.heroRevenue}>₱{stats.revenue.toFixed(2)}</Text>
+        <ScrollView
+          ref={pagerRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onLayout={(e) => setPagerWidth(e.nativeEvent.layout.width)}
+          onScroll={(e) => {
+            const w = e.nativeEvent.layoutMeasurement.width;
+            if (w > 0) {
+              const page = Math.round(e.nativeEvent.contentOffset.x / w);
+              if (page !== revenuePage && page >= 0 && page < revenuePages.length) setRevenuePage(page);
+            }
+          }}
+          scrollEventThrottle={16}
+        >
+          {pagerWidth > 0 && revenuePages.map((p) => (
+            <View key={p.key} style={{ width: pagerWidth, gap: 12 }}>
+              <Text style={[styles.heroRevenue, { color: p.color }]}>₱{p.value.toFixed(2)}</Text>
+              {/* Tap a bar to see that day's orders */}
+              <MiniBarChart
+                bars={p.bars}
+                color={p.barColor}
+                onPressBar={(b) => router.push({ pathname: '/(app)/(admin)/orders', params: { date: b.date } } as any)}
+              />
+            </View>
+          ))}
+        </ScrollView>
 
-        {/* 7-day bar chart — tap a bar to see that day's orders */}
-        <View style={styles.barChart}>
-          {bars.map((b, i) => {
-            const isToday = i === 6;
-            const barHeight = Math.max(4, (b.value / maxBarValue) * 52);
-            return (
-              <Pressable
-                key={i}
-                style={({ pressed }) => [styles.barColumn, pressed && { opacity: 0.7 }]}
-                onPress={() => router.push({ pathname: '/(app)/(admin)/orders', params: { date: b.date } } as any)}
-              >
-                {b.value > 0 && (
-                  <Text style={[styles.barValue, { color: isToday ? C.amber : C.muted2 }]}>
-                    {b.value >= 1000 ? `₱${(b.value / 1000).toFixed(1)}k` : `₱${b.value.toFixed(0)}`}
-                  </Text>
-                )}
-                <View
-                  style={[
-                    styles.bar,
-                    {
-                      height: barHeight,
-                      backgroundColor: isToday ? C.amber : C.amber + '73',
-                    },
-                  ]}
-                />
-                <Text style={[styles.barLabel, isToday && { color: C.amber, fontFamily: F.bold }]}>{b.day}</Text>
-              </Pressable>
-            );
-          })}
+        {/* Pager dots */}
+        <View style={styles.pagerDots}>
+          {revenuePages.map((p, i) => (
+            <Pressable key={p.key} hitSlop={8} onPress={() => goToRevenuePage(i)}>
+              <View
+                style={[
+                  styles.pagerDot,
+                  i === revenuePage
+                    ? { backgroundColor: activeRevenuePage.color, width: 18 }
+                    : { backgroundColor: C.line },
+                ]}
+              />
+            </Pressable>
+          ))}
         </View>
       </View>
 
@@ -354,6 +431,41 @@ export default function AdminDashboardScreen() {
         </Text>
         <MiniBarChart bars={printWeeklyBars} color={C.green} />
       </View>
+
+      {/* Online Users */}
+      <View style={styles.sectionRow}>
+        <Text style={styles.sectionTitle}>Online Users</Text>
+        {onlineUsers.length > 0 && (
+          <View style={styles.onlineBadge}>
+            <View style={styles.onlineBadgeDot} />
+            <Text style={styles.onlineBadgeText}>{onlineUsers.length} online</Text>
+          </View>
+        )}
+      </View>
+      {onlineUsers.length === 0 ? (
+        <View style={styles.empty}><Text style={styles.emptyText}>No users online</Text></View>
+      ) : (
+        onlineUsers.map((u) => (
+          <View key={u.uid} style={styles.onlineRow}>
+            <View style={styles.onlineAvatarWrap}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{u.email.charAt(0).toUpperCase()}</Text>
+              </View>
+              <View style={styles.onlineDot} />
+            </View>
+            <View style={styles.onlineInfo}>
+              <Text style={styles.customerName}>{u.email.split('@')[0]}</Text>
+              <Text style={styles.customerEmail} numberOfLines={1}>{u.email}</Text>
+            </View>
+            <Pressable
+              style={({ pressed }) => [styles.deleteAllBtn, pressed && { opacity: 0.7 }]}
+              onPress={() => kickUser(u)}
+            >
+              <Text style={styles.deleteAllText}>Log out</Text>
+            </Pressable>
+          </View>
+        ))
+      )}
 
       {/* Customers */}
       <View style={styles.sectionRow}>
@@ -625,6 +737,19 @@ const styles = StyleSheet.create({
   barLabel: { color: C.muted2, fontSize: 10, fontFamily: F.bold, textAlign: 'center' },
   barValue: { fontSize: 8, fontFamily: F.bold, textAlign: 'center' },
 
+  // Revenue pager
+  pagerDots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  pagerDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+
 
   // Metric Strip
   metricStrip: {
@@ -684,6 +809,45 @@ const styles = StyleSheet.create({
   },
   empty: { alignItems: 'center', padding: 20 },
   emptyText: { color: C.muted2, fontSize: 14, fontFamily: F.medium },
+
+  // Online Users
+  onlineBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: C.green + '1A',
+    borderWidth: 1,
+    borderColor: C.green + '55',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+  },
+  onlineBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.green },
+  onlineBadgeText: { color: C.green, fontSize: 11, fontFamily: F.bold },
+  onlineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: C.surface,
+    borderRadius: R.card,
+    borderWidth: 1,
+    borderColor: C.line,
+    padding: 14,
+    marginBottom: 8,
+  },
+  onlineAvatarWrap: { position: 'relative' },
+  onlineDot: {
+    position: 'absolute',
+    right: -1,
+    bottom: -1,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: C.green,
+    borderWidth: 2,
+    borderColor: C.surface,
+  },
+  onlineInfo: { flex: 1, gap: 2 },
 
   // Customer cards
   customerCard: {

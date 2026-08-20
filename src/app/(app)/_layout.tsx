@@ -13,9 +13,11 @@ import {
 
 import { useAuth } from '@/hooks/use-auth';
 import { useRole } from '@/hooks/use-role';
+import { logOut } from '@/lib/auth';
 import { type CashRequest, subscribeToUserCashRequests } from '@/lib/gcash';
 import { setupNotifications } from '@/lib/notifications';
 import { type Order, subscribeToUserOrders } from '@/lib/orders';
+import { registerPresence, subscribeToForceLogout } from '@/lib/presence';
 import { C, F } from '@/lib/theme';
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
@@ -161,6 +163,20 @@ export default function AppLayout() {
       router.replace('/(app)/(user)');
     }
   }, [role, loading, segments]);
+
+  // Presence + admin remote-logout (users only; admins never appear in the online list)
+  useEffect(() => {
+    if (!user || role !== 'user') return;
+    const cleanupPresence = registerPresence(user.uid, user.email ?? '');
+    const unsubKick = subscribeToForceLogout(user.uid, () => {
+      cleanupPresence();
+      logOut();
+    });
+    return () => {
+      unsubKick();
+      cleanupPresence();
+    };
+  }, [user, role]);
 
   useEffect(() => {
     if (!user || role !== 'user') return;
