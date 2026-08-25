@@ -136,36 +136,3 @@ export async function deleteOrder(orderId: string) {
 export async function deleteAllOrders() {
   await remove(ref(db, 'orders'));
 }
-
-export async function deleteProcessedOrders() {
-  const snapshot = await get(ref(db, 'orders'));
-  if (!snapshot.exists()) return;
-  const updates: Record<string, null> = {};
-  Object.entries(snapshot.val()).forEach(([id, order]: any) => {
-    if (order.status === 'completed' || order.status === 'cancelled') {
-      updates[id] = null;
-    }
-  });
-  if (Object.keys(updates).length > 0) {
-    await update(ref(db, 'orders'), updates);
-  }
-}
-
-function getPHTInfo(): { weekKey: string; hour: number; day: number } {
-  const pht = new Date(Date.now() + 8 * 60 * 60 * 1000);
-  // ISO week key: year + week number (e.g. "2025-W22")
-  const startOfYear = new Date(Date.UTC(pht.getUTCFullYear(), 0, 1));
-  const weekNum = Math.ceil(((pht.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getUTCDay() + 1) / 7);
-  const weekKey = `${pht.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
-  return { weekKey, hour: pht.getUTCHours(), day: pht.getUTCDay() }; // day: 0=Sun, 1=Mon
-}
-
-export async function runWeeklyCleanupIfNeeded() {
-  const { weekKey, hour, day } = getPHTInfo();
-  // Only run on Monday (day === 1) at or after 10 AM PHT
-  if (day !== 1 || hour < 10) return;
-  const snapshot = await get(ref(db, 'orderCleanup/lastWeek'));
-  if (snapshot.val() === weekKey) return;
-  await deleteProcessedOrders();
-  await set(ref(db, 'orderCleanup/lastWeek'), weekKey);
-}

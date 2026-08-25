@@ -29,7 +29,7 @@ const STATUS_CONFIG: Record<Order["status"], { color: string; label: string }> =
 		cancelled: { color: C.coral, label: "CANCELLED" },
 	};
 
-type Filter = "all" | "pending" | "completed";
+type Filter = "all" | "cash" | "gcash" | "completed";
 
 export default function AdminOrdersScreen() {
 	const { date } = useLocalSearchParams<{ date?: string }>();
@@ -131,8 +131,11 @@ export default function AdminOrdersScreen() {
 			})
 		: orders;
 
-	const pendingCount = dateFiltered.filter(
-		(o) => o.status === "pending",
+	const cashCount = dateFiltered.filter(
+		(o) => o.paymentStatus === "cash",
+	).length;
+	const gcashCount = dateFiltered.filter(
+		(o) => o.paymentStatus === "gcash",
 	).length;
 	const completedCount = dateFiltered.filter(
 		(o) => o.status === "completed" || o.status === "confirmed",
@@ -151,7 +154,7 @@ export default function AdminOrdersScreen() {
 			: dateFiltered.filter((o) =>
 					filter === "completed"
 						? o.status === "completed" || o.status === "confirmed"
-						: o.status === filter,
+						: o.paymentStatus === filter,
 				)
 	).filter((o) => {
 		if (!search) return true;
@@ -168,7 +171,8 @@ export default function AdminOrdersScreen() {
 
 	const TABS: { key: Filter; label: string; count?: number }[] = [
 		{ key: "all", label: "All" },
-		{ key: "pending", label: "Pending", count: pendingCount },
+		{ key: "cash", label: "Cash", count: cashCount },
+		{ key: "gcash", label: "GCash", count: gcashCount },
 		{ key: "completed", label: "Completed", count: completedCount },
 	];
 

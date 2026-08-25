@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { type CashRequest, subscribeToAllCashRequests, updateCashRequestStatus } from '@/lib/gcash';
 import { type LoadRequest, subscribeToAllLoadRequests, updateLoadRequestStatus } from '@/lib/load';
 import { sendAdminAlert } from '@/lib/notifications';
-import { type Order, runWeeklyCleanupIfNeeded, subscribeToOrders, updateOrderStatus } from '@/lib/orders';
+import { type Order, subscribeToOrders, updateOrderStatus } from '@/lib/orders';
 import { type AddOn, type Product, subscribeToAllProducts } from '@/lib/products';
 import { C, F } from '@/lib/theme';
 
@@ -391,12 +391,6 @@ export default function AdminLayout() {
       setPendingLoad(requests.filter((r) => r.status === 'pending').length);
     });
     return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    runWeeklyCleanupIfNeeded();
-    const interval = setInterval(runWeeklyCleanupIfNeeded, 60 * 1000);
-    return () => clearInterval(interval);
   }, []);
 
   const badges: Record<string, number> = {
